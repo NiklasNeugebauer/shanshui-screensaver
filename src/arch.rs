@@ -1,3 +1,4 @@
+// Port of shan-shui-inf by Lingdong Huang (https://github.com/LingDong-/shan-shui-inf), MIT. See LICENSE.
 use crate::draw::*;
 use crate::man::{self, ManArgs};
 use crate::rng::rand;

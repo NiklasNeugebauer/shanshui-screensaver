@@ -1,3 +1,4 @@
+// Port of shan-shui-inf by Lingdong Huang (https://github.com/LingDong-/shan-shui-inf), MIT. See LICENSE.
 use crate::rng::{jfloor, noise, noise2, noise3, rand};
 use std::f64::consts::PI;
 
