@@ -46,7 +46,7 @@ Each monitor gets its own seed, so they show different landscapes.
 | `--speed <px/s>` | `24` | scroll speed, snapped down to the nearest regular cadence (see below) |
 | `--fps <n>` | `30` | upper bound on steps per second, for when `--speed` is very fast |
 | `--zoom <f>` | fit height | pixels per world unit |
-| `--fade <secs>` | `1.3` | how long the scene takes to fade in over the paper at the start; `0` shows it at once |
+| `--fade <secs>` | `1.5` | how long the scene takes to fade in over the paper at the start; `0` shows it at once |
 | `--class <name>` | `org.omarchy.screensaver` | Wayland app-id |
 | `--windowed` | — | a single normal window instead of fullscreen |
 | `--png <file>` | — | render one frame and exit |
