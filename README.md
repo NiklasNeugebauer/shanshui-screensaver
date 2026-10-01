@@ -55,7 +55,7 @@ The world is rasterized once into 512 px-wide tiles on a background thread that 
 |---|---|
 | 1920×1080 | ~8% |
 | 2560×1440 | ~10% |
-| 3840×2160 | ~19% |
+| 3840×2160 | ~21% |
 
 `--fps` scales that down roughly linearly. Measure your own with `--bench`.
 

@@ -19,83 +19,58 @@ mod tests;
 mod tree;
 mod world;
 
+use clap::Parser;
+
 use raster::{Raster, WORLD_H};
 use world::World;
 
+/// Procedurally generated infinite landscape scroll, as an Omarchy screensaver.
+#[derive(Parser, Debug, Clone)]
+#[command(name = "shanshui", version, about, long_about = None)]
 pub struct Opts {
-    pub seed: Option<String>,
-    pub speed: f64,
-    pub fps: u32,
-    pub zoom: Option<f64>,
-    pub png: Option<String>,
-    pub width: u32,
-    pub height: u32,
-    pub x: f64,
-    pub windowed: bool,
+    /// Wayland app-id; Omarchy's idle service and window rules key off this
+    #[arg(long, default_value = "org.omarchy.screensaver")]
     pub class: String,
+
+    /// Scene seed; the same seed reproduces the same landscape
+    #[arg(long)]
+    pub seed: Option<String>,
+
+    /// Scroll speed in logical pixels per second
+    #[arg(long, default_value_t = 24.0)]
+    pub speed: f64,
+
+    /// Frame cap
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=240))]
+    pub fps: u32,
+
+    /// Pixels per world unit (default: fit the window height)
+    #[arg(long)]
+    pub zoom: Option<f64>,
+
+    /// Open a single normal window instead of one fullscreen window per monitor
+    #[arg(long)]
+    pub windowed: bool,
+
+    /// Render one frame to this PNG file and exit
+    #[arg(long, value_name = "FILE")]
+    pub png: Option<String>,
+
+    /// Run the pipeline headlessly for this many seconds and report CPU use
+    #[arg(long, value_name = "SECS")]
     pub bench: Option<f64>,
-}
 
-impl Default for Opts {
-    fn default() -> Self {
-        Opts {
-            seed: None,
-            speed: 24.0,
-            fps: 30,
-            zoom: None,
-            png: None,
-            width: 1920,
-            height: 1080,
-            x: 0.0,
-            windowed: false,
-            class: "org.omarchy.screensaver".into(),
-            bench: None,
-        }
-    }
-}
+    /// Frame width for --png and --bench
+    #[arg(long, default_value_t = 1920)]
+    pub width: u32,
 
-const USAGE: &str = "\
-shanshui - procedurally generated infinite landscape scroll
+    /// Frame height for --png and --bench
+    #[arg(long, default_value_t = 1080)]
+    pub height: u32,
 
-  --class <name>      wayland app-id (default org.omarchy.screensaver)
-  --seed <string>     scene seed (default: current time)
-  --speed <px/s>      scroll speed, default 24
-  --fps <n>           frame cap, default 30
-  --zoom <f>          pixels per world unit (default: fit window height)
-  --windowed          do not request fullscreen
-  --bench <secs>      run the pipeline headlessly and report CPU use
-  --png <file>        render one frame to PNG and exit
-  --width/--height    size for --png, default 1920x1080
-  --x <px>            horizontal scroll offset for --png
-  -h, --help          this text
-";
-
-fn parse_args() -> Option<Opts> {
-    let mut o = Opts::default();
-    let mut it = std::env::args().skip(1);
-    while let Some(a) = it.next() {
-        let mut next = || it.next().unwrap_or_default();
-        match a.as_str() {
-            "--class" => o.class = next(),
-            "--seed" => o.seed = Some(next()),
-            "--speed" => o.speed = next().parse().unwrap_or(o.speed),
-            "--fps" => o.fps = next().parse().unwrap_or(o.fps),
-            "--zoom" => o.zoom = next().parse().ok(),
-            "--png" => o.png = Some(next()),
-            "--width" => o.width = next().parse().unwrap_or(o.width),
-            "--height" => o.height = next().parse().unwrap_or(o.height),
-            "--x" => o.x = next().parse().unwrap_or(o.x),
-            "--windowed" => o.windowed = true,
-            "--bench" => o.bench = next().parse().ok().or(Some(5.0)),
-            "-h" | "--help" => {
-                print!("{USAGE}");
-                return None;
-            }
-            s if s.contains("org.omarchy.screensaver") => {}
-            s => eprintln!("shanshui: ignoring unknown argument {s}"),
-        }
-    }
-    Some(o)
+    /// Horizontal scroll offset in pixels for --png and --bench
+    #[arg(long, default_value_t = 0.0)]
+    pub x: f64,
 }
 
 pub fn time_seed() -> String {
@@ -112,10 +87,7 @@ pub fn make_raster(seed: &str, width: u32, height: u32, zoom: Option<f64>) -> Ra
 }
 
 fn main() {
-    let o = match parse_args() {
-        Some(o) => o,
-        None => return,
-    };
+    let o = Opts::parse();
     let seed = o.seed.clone().unwrap_or_else(time_seed);
     if let Some(path) = &o.png {
         let mut r = make_raster(&seed, o.width, o.height, o.zoom);

@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
@@ -18,18 +19,16 @@ const GRACE: Duration = Duration::from_millis(500);
 const DEADZONE: f64 = 12.0;
 const PAPER_FALLBACK: u32 = 0x00f3ecdd;
 
-static SIGNALLED: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn on_signal(_: libc::c_int) {
-    SIGNALLED.store(true, Ordering::SeqCst);
-}
-
-fn install_signals() {
-    unsafe {
-        libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGHUP, on_signal as *const () as libc::sighandler_t);
+fn install_signals() -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    for sig in [
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGHUP,
+    ] {
+        let _ = signal_hook::flag::register(sig, flag.clone());
     }
+    flag
 }
 
 struct Pane {
@@ -45,6 +44,23 @@ struct Pane {
     want: i64,
     drawn: i64,
     focused: bool,
+    seed: String,
+    zoom: Option<f64>,
+}
+
+impl Pane {
+    fn restart(&mut self) {
+        let (tx_req, rx_req) = channel();
+        let (tx_out, rx_out) = channel();
+        let scale = self.zoom.unwrap_or(self.h as f64 / WORLD_H);
+        spawn_worker(self.seed.clone(), scale, self.h, rx_req, tx_out);
+        self.rx = rx_out;
+        self.tx = tx_req;
+        self.tiles.clear();
+        self.want = -1;
+        self.drawn = i64::MIN;
+        self.scroll = 0.0;
+    }
 }
 
 fn spawn_worker(
@@ -127,6 +143,9 @@ fn blit(tiles: &VecDeque<(i64, Vec<u32>)>, x0: i64, w: usize, h: usize, dst: &mu
         dst.fill(PAPER_FALLBACK);
     }
     for (idx, tile) in tiles {
+        if tile.len() < TILE as usize * h {
+            continue;
+        }
         let t0 = idx * tw;
         let a = t0.max(x0);
         let b = (t0 + tw).min(x0 + w as i64);
@@ -204,15 +223,14 @@ pub fn bench(opts: Opts, seed: String, secs: f64) {
     );
 }
 
+/// Process CPU time, read the way /proc exposes it so no libc binding is needed.
 fn cpu_time() -> f64 {
-    unsafe {
-        let mut u: libc::rusage = std::mem::zeroed();
-        libc::getrusage(libc::RUSAGE_SELF, &mut u);
-        u.ru_utime.tv_sec as f64
-            + u.ru_utime.tv_usec as f64 * 1e-6
-            + u.ru_stime.tv_sec as f64
-            + u.ru_stime.tv_usec as f64 * 1e-6
-    }
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    let tail = stat.rsplit(')').next().unwrap_or("");
+    let f: Vec<&str> = tail.split_whitespace().collect();
+    let ticks: f64 = f.get(11).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let sticks: f64 = f.get(12).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    (ticks + sticks) / 100.0
 }
 
 struct App {
@@ -224,6 +242,9 @@ struct App {
     frame: Duration,
     pointer: Option<(f64, f64)>,
     quitting: bool,
+    ever_focused: bool,
+    unfocused_since: Option<Instant>,
+    signalled: Arc<AtomicBool>,
 }
 
 impl App {
@@ -278,7 +299,7 @@ impl ApplicationHandler for App {
             let seed = format!("{}:{}", self.seed, i);
             let (tx_req, rx_req) = channel();
             let (tx_out, rx_out) = channel();
-            spawn_worker(seed, scale, h, rx_req, tx_out);
+            spawn_worker(seed.clone(), scale, h, rx_req, tx_out);
             let mut pane = Pane {
                 window,
                 surface,
@@ -292,8 +313,11 @@ impl ApplicationHandler for App {
                 want: -1,
                 drawn: i64::MIN,
                 focused: false,
+                seed,
+                zoom: self.opts.zoom,
             };
             pane.pump();
+            pane.draw();
             self.panes.push(pane);
         }
         self.start = Instant::now();
@@ -334,29 +358,39 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(f) => {
-                let mut lost = false;
+                if std::env::var_os("SHANSHUI_DEBUG").is_some() {
+                    eprintln!("shanshui: focus={f} at {:?}", self.start.elapsed());
+                }
                 for p in self.panes.iter_mut() {
                     if p.window.id() == id {
-                        if f {
-                            p.focused = true;
-                        } else if p.focused {
-                            lost = true;
-                        }
+                        p.focused = f;
                     }
                 }
-                if lost && armed {
-                    self.quit(el, "focus lost");
+                if f {
+                    self.ever_focused = true;
+                    self.unfocused_since = None;
+                } else if self.unfocused_since.is_none() {
+                    // a second monitor's window taking focus unfocuses the first,
+                    // so settle before deciding the user came back
+                    self.unfocused_since = Some(Instant::now());
                 }
             }
             WindowEvent::Resized(size) => {
                 for p in self.panes.iter_mut() {
                     if p.window.id() == id {
+                        let h = size.height.max(1);
+                        let changed = h != p.h;
                         p.w = size.width.max(1);
-                        p.h = size.height.max(1);
+                        p.h = h;
                         let _ = p.surface.resize(
                             NonZeroU32::new(p.w).unwrap(),
                             NonZeroU32::new(p.h).unwrap(),
                         );
+                        // tiles are full-window-height, so a height change
+                        // invalidates every one of them
+                        if changed {
+                            p.restart();
+                        }
                     }
                 }
             }
@@ -382,12 +416,22 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
-        if SIGNALLED.load(Ordering::SeqCst) {
+        if self.signalled.load(Ordering::Relaxed) {
             self.quit(el, "signal");
             return;
         }
         if self.quitting {
             return;
+        }
+        if let Some(t) = self.unfocused_since {
+            if self.ever_focused
+                && self.start.elapsed() > GRACE
+                && t.elapsed() > Duration::from_millis(200)
+                && !self.panes.iter().any(|p| p.focused)
+            {
+                self.quit(el, "focus lost");
+                return;
+            }
         }
         let now = Instant::now();
         let dt = now.duration_since(self.last);
@@ -413,7 +457,7 @@ fn window_scale(monitors: &[winit::monitor::MonitorHandle], i: usize) -> f64 {
 }
 
 pub fn run(opts: Opts, seed: String) {
-    install_signals();
+    let signalled = install_signals();
     let el = match EventLoop::new() {
         Ok(e) => e,
         Err(e) => {
@@ -432,6 +476,9 @@ pub fn run(opts: Opts, seed: String) {
         frame: Duration::from_secs_f64(1.0 / fps as f64),
         pointer: None,
         quitting: false,
+        ever_focused: false,
+        unfocused_since: None,
+        signalled,
     };
     let _ = el.run_app(&mut app);
     std::process::exit(0);

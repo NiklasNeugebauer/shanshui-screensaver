@@ -9,7 +9,8 @@ license = "MIT"
 tiny-skia = "0.11"
 winit = { version = "0.30", default-features = false, features = ["wayland", "rwh_06"] }
 softbuffer = { version = "0.4", default-features = false, features = ["wayland"] }
-libc = "0.2"
+clap = { version = "4", features = ["derive"] }
+signal-hook = { version = "0.3", default-features = false }
 
 [profile.release]
 opt-level = 3
