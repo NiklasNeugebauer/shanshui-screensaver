@@ -2,9 +2,11 @@
 
 # omarchy:summary=Launch the shanshui screensaver on every monitor.
 #
-# Drop-in replacement for the stock launcher. A login shell resolves
-# ~/.local/bin before /usr/share/omarchy/bin, so the idle service and the
-# "Screensaver" menu entry pick this up without touching the system copy.
+# Drop-in replacement for the stock launcher. Installed to ~/.local/overrides/bin,
+# which the user puts first in the session PATH (see README), so the idle
+# service (bash -lc) and the "Screensaver" menu entry both pick this up without
+# touching the system copy. ~/.local/bin would not work: Omarchy appends it
+# after /usr/bin on purpose.
 
 # Exit early if the screensaver is already running
 pgrep -f '[o]rg.omarchy.screensaver' >/dev/null && exit 0

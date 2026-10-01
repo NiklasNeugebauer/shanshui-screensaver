@@ -10,18 +10,29 @@ The scene never repeats and is never the same twice: each run picks a seed, and 
 make install
 ```
 
-That builds with `cargo` and copies two files into `~/.local/bin`:
+That builds with `cargo` and installs two files:
 
-- `shanshui` — the binary
-- `omarchy-launch-screensaver` — a shim that shadows the stock launcher
+- `~/.local/bin/shanshui` — the binary
+- `~/.local/overrides/bin/omarchy-launch-screensaver` — a shim that shadows the stock launcher
 
-`make uninstall` removes both. Nothing under `/usr/share/omarchy/` is touched.
+The shim only wins if `~/.local/overrides/bin` comes first in the session PATH. Omarchy appends `~/.local/bin` *after* `/usr/bin` on purpose, so a shim there never works. Add the override dir once, in a uwsm env file, then log out and back in:
+
+```bash
+cat > ~/.config/uwsm/env.d/30-overrides-path <<'EOF'
+case ":$PATH:" in
+  *":$HOME/.local/overrides/bin:"*) ;;
+  *) export PATH="$HOME/.local/overrides/bin${PATH:+:$PATH}" ;;
+esac
+EOF
+```
+
+Until then you can start it by hand with `~/.local/overrides/bin/omarchy-launch-screensaver force`. `make uninstall` removes the binary and the shim. Nothing under `/usr/share/omarchy/` is touched.
 
 Needs a Rust toolchain; via mise that is `mise use -g rust@latest`.
 
 ## How it hooks into Omarchy
 
-The idle service runs `bash -lc omarchy-launch-screensaver`, and a login shell resolves `~/.local/bin` before `/usr/share/omarchy/bin`, so the shim is picked up with no further configuration. It keeps the stock behaviour: it exits early if a screensaver is already running, honours the `screensaver-off` toggle unless called with `force` (what the "Screensaver" menu entry does), and launches through `hyprctl dispatch`. If the binary is missing it hands over to the stock launcher.
+The idle service runs `bash -lc omarchy-launch-screensaver` and the "Screensaver" menu entry runs the same command; both resolve it through the session PATH, which is why the override dir above has to come first. It keeps the stock behaviour: it exits early if a screensaver is already running, honours the `screensaver-off` toggle unless called with `force` (what the "Screensaver" menu entry does), and launches through `hyprctl dispatch`. If the binary is missing it hands over to the stock launcher.
 
 The binary opens one fullscreen window per monitor with the app-id `org.omarchy.screensaver`, which is what the Hyprland rules and the idle service's window watcher look for. `pkill -f '[o]rg.omarchy.screensaver'` still stops it. The whole process exits on any key, mouse button, scroll, pointer movement, focus loss, or SIGTERM.
 

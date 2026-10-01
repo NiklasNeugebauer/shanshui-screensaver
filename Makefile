@@ -1,4 +1,5 @@
 PREFIX ?= $(HOME)/.local
+OVERRIDE_BIN ?= $(HOME)/.local/overrides/bin
 
 .PHONY: build install uninstall test check clean
 
@@ -7,11 +8,12 @@ build:
 
 install: build
 	install -Dm755 target/release/shanshui $(PREFIX)/bin/shanshui
-	install -Dm755 scripts/omarchy-launch-screensaver $(PREFIX)/bin/omarchy-launch-screensaver
-	@echo "installed to $(PREFIX)/bin — the next idle timeout uses it"
+	install -Dm755 scripts/omarchy-launch-screensaver $(OVERRIDE_BIN)/omarchy-launch-screensaver
+	@echo "installed; try it now with: $(OVERRIDE_BIN)/omarchy-launch-screensaver force"
+	@case ":$$PATH:" in *":$(OVERRIDE_BIN):"*) ;; *) echo "NOTE: $(OVERRIDE_BIN) is not on PATH yet - see README, Install"; esac
 
 uninstall:
-	rm -f $(PREFIX)/bin/shanshui $(PREFIX)/bin/omarchy-launch-screensaver
+	rm -f $(PREFIX)/bin/shanshui $(OVERRIDE_BIN)/omarchy-launch-screensaver
 
 test:
 	cargo test --release
