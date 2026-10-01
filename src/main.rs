@@ -49,7 +49,7 @@ pub struct Opts {
     pub zoom: Option<f64>,
 
     /// Seconds to fade the scene in over the paper on the first frame; 0 disables
-    #[arg(long, default_value_t = 1.0, value_name = "SECS")]
+    #[arg(long, default_value_t = 1.3, value_name = "SECS")]
     pub fade: f64,
 
     /// Open a single normal window instead of one fullscreen window per monitor
