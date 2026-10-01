@@ -5,7 +5,7 @@ port of shan-shui-inf (https://github.com/LingDong-/shan-shui-inf):
 
     Copyright (c) 2018 Lingdong Huang
 
-Everything else:
+Everything else except src/noise.rs:
 
     Copyright (c) 2026 Niklas Neugebauer
 
@@ -26,3 +26,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+----------------------------------------------------------------------
+
+src/noise.rs is NOT covered by the MIT license above. It is a port of the
+Perlin noise in p5.js (https://github.com/processing/p5.js, src/math/noise.js,
+Copyright (c) the p5.js contributors; adapted there from Processing), which
+shan-shui-inf copied verbatim. It is licensed under the GNU Lesser General
+Public License, version 2.1 or (at your option) any later version. The full
+text is in LICENSE-LGPL-2.1. Because the complete source of this program is
+published, anyone can modify that file and rebuild the binary, which is how
+the LGPL's relinking requirement is met for a statically linked executable.

@@ -11,6 +11,7 @@ mod arch;
 mod draw;
 mod man;
 mod mount;
+mod noise;
 mod raster;
 mod rng;
 mod screensaver;

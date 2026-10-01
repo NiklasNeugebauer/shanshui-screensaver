@@ -3,7 +3,7 @@ name = "shanshui"
 version = "0.1.0"
 edition = "2021"
 description = "Procedurally generated infinite Chinese landscape scroll as a Wayland screensaver"
-license = "MIT"
+license = "MIT AND LGPL-2.1-or-later"
 
 [dependencies]
 tiny-skia = "0.11"

@@ -112,3 +112,5 @@ Three deliberate differences:
 ## Credit
 
 The landscape itself is [shan-shui-inf](https://github.com/LingDong-/shan-shui-inf) by [Lingdong Huang](https://lingdong.works), MIT licensed. This repository is the port and the screensaver plumbing around it. See `LICENSE`.
+
+One exception: the Perlin noise in `src/noise.rs` descends from [p5.js](https://github.com/processing/p5.js) via shan-shui-inf and stays under the LGPL 2.1 (`LICENSE-LGPL-2.1`); the rest of the crate is MIT. Cargo declares this as `MIT AND LGPL-2.1-or-later`.
