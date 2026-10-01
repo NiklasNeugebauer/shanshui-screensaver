@@ -1,42 +1,16 @@
-# omarchy-shanshui
+# shanshui-screensaver
 
-An infinite, procedurally generated Chinese landscape scroll as the [Omarchy](https://omarchy.org) screensaver — a Rust port of Lingdong Huang's [shan-shui-inf](https://github.com/LingDong-/shan-shui-inf), drawn with `tiny-skia` straight onto a Wayland surface.
+An infinite, procedurally generated Chinese landscape scroll as a Wayland screensaver — a Rust port of Lingdong Huang's [shan-shui-inf](https://github.com/LingDong-/shan-shui-inf), drawn with `tiny-skia` straight onto a Wayland surface.
 
-The scene never repeats and is never the same twice: each run picks a seed, and the landscape is generated lazily to the right as it scrolls past.
+The scene never repeats and is never the same twice: each run picks a seed, and the landscape is generated lazily to the right as it scrolls past. One fullscreen window per monitor, each with its own seed. The process exits on any key, mouse button, scroll, pointer movement, focus loss, or SIGTERM.
 
 ## Install
 
 ```bash
-make install
+make install        # cargo build --release, binary to ~/.local/bin/shanshui
 ```
 
-That builds with `cargo` and installs two files:
-
-- `~/.local/bin/shanshui` — the binary
-- `~/.local/overrides/bin/omarchy-launch-screensaver` — a shim that shadows the stock launcher
-
-The shim only wins if `~/.local/overrides/bin` comes first in the session PATH. Omarchy appends `~/.local/bin` *after* `/usr/bin` on purpose, so a shim there never works. Add the override dir once, in a uwsm env file, then log out and back in:
-
-```bash
-cat > ~/.config/uwsm/env.d/30-overrides-path <<'EOF'
-case ":$PATH:" in
-  *":$HOME/.local/overrides/bin:"*) ;;
-  *) export PATH="$HOME/.local/overrides/bin${PATH:+:$PATH}" ;;
-esac
-EOF
-```
-
-Until then you can start it by hand with `~/.local/overrides/bin/omarchy-launch-screensaver force`. `make uninstall` removes the binary and the shim. Nothing under `/usr/share/omarchy/` is touched.
-
-Needs a Rust toolchain; via mise that is `mise use -g rust@latest`.
-
-## How it hooks into Omarchy
-
-The idle service runs `bash -lc omarchy-launch-screensaver` and the "Screensaver" menu entry runs the same command; both resolve it through the session PATH, which is why the override dir above has to come first. It keeps the stock behaviour: it exits early if a screensaver is already running, honours the `screensaver-off` toggle unless called with `force` (what the "Screensaver" menu entry does), and launches through `hyprctl dispatch`. If the binary is missing it hands over to the stock launcher.
-
-The binary opens one fullscreen window per monitor with the app-id `org.omarchy.screensaver`, which is what the Hyprland rules and the idle service's window watcher look for. `pkill -f '[o]rg.omarchy.screensaver'` still stops it. The whole process exits on any key, mouse button, scroll, pointer movement, focus loss, or SIGTERM.
-
-Each monitor gets its own seed, so they show different landscapes.
+Needs a Rust toolchain and a Wayland compositor. Run it with `shanshui`; it fullscreens itself on every monitor. `make uninstall` removes it.
 
 ## Flags
 
@@ -47,7 +21,7 @@ Each monitor gets its own seed, so they show different landscapes.
 | `--fps <n>` | `30` | upper bound on steps per second, for when `--speed` is very fast |
 | `--zoom <f>` | fit height | pixels per world unit |
 | `--fade <secs>` | `1.5` | how long the scene takes to fade in over the paper at the start; `0` shows it at once |
-| `--class <name>` | `org.omarchy.screensaver` | Wayland app-id |
+| `--class <name>` | `org.omarchy.screensaver` | Wayland app-id, for compositor window rules |
 | `--windowed` | — | a single normal window instead of fullscreen |
 | `--png <file>` | — | render one frame and exit |
 | `--width`/`--height`/`--x` | `1920`/`1080`/`0` | size and scroll offset for `--png` and `--bench` |
@@ -56,8 +30,6 @@ Each monitor gets its own seed, so they show different landscapes.
 ```bash
 shanshui --png scene.png --seed 20260101 --x 9000
 ```
-
-Set `SHANSHUI_ARGS` to pass flags through the shim.
 
 ## Scrolling
 
@@ -108,6 +80,27 @@ Three deliberate differences:
 - The `Pizza Hut` sign the original sometimes puts on a one-storey roof is skipped; there is no text rendering (the random draw that decides it is still made, so the scene is otherwise identical).
 - Elements are drawn whenever their geometry overlaps the view rather than when their anchor is within one chunk of it, so nothing pops in at the edges.
 - The paper texture uses its own PRNG stream instead of continuing the scene's.
+
+## Using it as the Omarchy screensaver
+
+[Omarchy](https://omarchy.org) starts its screensaver through `omarchy-launch-screensaver`, both from the idle timeout and from the "Screensaver" menu entry, and fullscreens any window with the app-id `org.omarchy.screensaver`. This repo ships a drop-in replacement for that launcher:
+
+```bash
+make install-omarchy    # binary + shim to ~/.local/overrides/bin/omarchy-launch-screensaver
+```
+
+The shim only wins if `~/.local/overrides/bin` comes first in the session PATH; Omarchy appends `~/.local/bin` *after* `/usr/bin` on purpose, so a shim there never works. Add the override dir once in a uwsm env file, then log out and back in:
+
+```bash
+cat > ~/.config/uwsm/env.d/30-overrides-path <<'EOF'
+case ":$PATH:" in
+  *":$HOME/.local/overrides/bin:"*) ;;
+  *) export PATH="$HOME/.local/overrides/bin${PATH:+:$PATH}" ;;
+esac
+EOF
+```
+
+The shim keeps the stock behaviour (exits early if a screensaver is already running, honours the `screensaver-off` toggle unless called with `force`, launches through `hyprctl dispatch`) and hands over to the stock launcher if the binary is missing. Set `SHANSHUI_ARGS` to pass flags through it. Nothing under `/usr/share/omarchy/` is touched; `make uninstall` removes the binary and the shim.
 
 ## Credit
 

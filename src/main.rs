@@ -25,11 +25,11 @@ use clap::Parser;
 use raster::{Raster, WORLD_H};
 use world::World;
 
-/// Procedurally generated infinite landscape scroll, as an Omarchy screensaver.
+/// Procedurally generated infinite landscape scroll, as a Wayland screensaver.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "shanshui", version, about, long_about = None)]
 pub struct Opts {
-    /// Wayland app-id; Omarchy's idle service and window rules key off this
+    /// Wayland app-id for compositor window rules (Omarchy keys its screensaver rules off the default)
     #[arg(long, default_value = "org.omarchy.screensaver")]
     pub class: String,
 
