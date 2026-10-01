@@ -87,6 +87,10 @@ struct Pane {
     content: [i64; RING],
     /// the first screenful is held back as plain paper rather than shown in pieces
     ready: bool,
+    /// seconds the ink takes to fade in once the first screenful is ready
+    fade_secs: f64,
+    /// start of that fade; `None` once it has run (or if it is switched off)
+    fade_from: Option<Instant>,
     seed: String,
     zoom: Option<f64>,
     name: String,
@@ -97,6 +101,7 @@ struct Pane {
     acq_us: Vec<f64>,
     commit_us: Vec<f64>,
     blit_us: Vec<f64>,
+    fade_us: Vec<f64>,
     present_us: Vec<f64>,
 }
 
@@ -113,6 +118,7 @@ impl Pane {
         self.want = -1;
         self.scroll = 0.0;
         self.ready = false;
+        self.fade_from = None;
         self.content = [UNKNOWN; RING];
         let speed_px = speed * self.window.scale_factor();
         self.k = cadence(self.refresh, speed_px, fps);
@@ -207,6 +213,7 @@ impl Pane {
         }
         if !self.ready && covers(&self.tiles, x0, self.w as i64) {
             self.ready = true;
+            self.fade_from = (self.fade_secs > 0.0).then(Instant::now);
             trace!(
                 "{} first screenful complete ({} tiles, after {} presents)",
                 self.name,
@@ -216,9 +223,23 @@ impl Pane {
         }
     }
 
+    /// Ink opacity for this frame as 8.8 fixed point in `0..=256`, or `None`
+    /// once the fade is over and the plain blit takes back over for good.
+    fn fade_alpha(&mut self) -> Option<u32> {
+        let t = self.fade_from?.elapsed().as_secs_f64() / self.fade_secs;
+        if !(t < 1.0) {
+            self.fade_from = None;
+            return None;
+        }
+        // smoothstep: ease in and out, so neither end of the fade has a
+        // visible onset
+        Some((t * t * (3.0 - 2.0 * t) * 256.0) as u32)
+    }
+
     fn draw(&mut self, wakeup: Instant) {
         let (w, h) = (self.w as usize, self.h as usize);
         let want = if self.ready { self.scroll as i64 } else { BLANK };
+        let alpha = if want == BLANK { None } else { self.fade_alpha() };
         let t_acq = Instant::now();
         let mut sb = match self.surface.buffer_mut() {
             Ok(b) => b,
@@ -233,14 +254,18 @@ impl Pane {
             && self.content[((self.presents - age) % RING as u64) as usize] == want;
         let t_blit = Instant::now();
         if !fresh {
-            if want == BLANK {
-                sb.fill(PAPER_FALLBACK);
-            } else {
-                blit(&self.tiles, want, w, h, &mut sb);
+            match alpha {
+                _ if want == BLANK => sb.fill(PAPER_FALLBACK),
+                Some(a) => blit_fade(&self.tiles, want, w, h, &mut sb, a),
+                None => blit(&self.tiles, want, w, h, &mut sb),
             }
         }
         let blit_t = t_blit.elapsed();
-        self.content[(self.presents % RING as u64) as usize] = want;
+        // A half-faded buffer is not the content `want` names, so the ring must
+        // not let the next present reuse it: both buffers are repainted on
+        // every frame of the fade and again once it ends.
+        self.content[(self.presents % RING as u64) as usize] =
+            if alpha.is_some() { UNKNOWN } else { want };
         self.presents += 1;
         let t_pre = Instant::now();
         // Tells winit a frame callback is wanted; without it RedrawRequested is
@@ -258,7 +283,10 @@ impl Pane {
         self.commit_us.push(now.duration_since(wakeup).as_secs_f64() * 1e6);
         self.acq_us.push(acq.as_secs_f64() * 1e6);
         if !fresh {
-            self.blit_us.push(blit_t.as_secs_f64() * 1e6);
+            // kept apart so the blit figures stay comparable to a run without
+            // a fade
+            if alpha.is_some() { &mut self.fade_us } else { &mut self.blit_us }
+                .push(blit_t.as_secs_f64() * 1e6);
         }
         self.ages.push(age as u32);
         self.present_us.push(pre.as_secs_f64() * 1e6);
@@ -355,6 +383,16 @@ impl Pane {
         for a in &self.ages {
             *ah.entry(*a).or_insert(0usize) += 1;
         }
+        if !self.fade_us.is_empty() {
+            let mut f = self.fade_us.clone();
+            eprintln!(
+                "    fade: {} blended frames, p50 {:.2}ms p95 {:.2}ms max {:.2}ms",
+                f.len(),
+                pct(&mut f, 0.5) / 1000.0,
+                pct(&mut f, 0.95) / 1000.0,
+                pct(&mut f, 1.0) / 1000.0
+            );
+        }
         eprintln!(
             "    buffer ages: {:?}  blits {}/{} presents ({:.0}%)",
             ah,
@@ -403,6 +441,52 @@ fn blit(tiles: &VecDeque<(i64, Vec<u32>)>, x0: i64, w: usize, h: usize, dst: &mu
             let d = y * w + dst_off;
             let s = y * TILE as usize + src_off;
             dst[d..d + n].copy_from_slice(&tile[s..s + n]);
+        }
+    }
+}
+
+/// `blit`, with every pixel lerped toward the plain paper colour on the way in:
+/// `a` is the ink opacity in `0..=256`. Both halves of each word are blended at
+/// once, which keeps this close to the plain blit's memory-bound cost; folding
+/// it into the copy rather than running a second pass over the surface avoids
+/// reading back what was just written.
+fn blit_fade(
+    tiles: &VecDeque<(i64, Vec<u32>)>,
+    x0: i64,
+    w: usize,
+    h: usize,
+    dst: &mut [u32],
+    a: u32,
+) {
+    // a + inv == 256, so each channel stays a convex combination of two bytes
+    // and cannot overflow its 16-bit lane.
+    let inv = 256 - a;
+    let prb = (PAPER_FALLBACK & 0x00ff00ff) * inv;
+    let pg = (PAPER_FALLBACK & 0x0000ff00) * inv;
+    if !covers(tiles, x0, w as i64) {
+        dst.fill(PAPER_FALLBACK);
+    }
+    let tw = TILE as i64;
+    for (idx, tile) in tiles {
+        if tile.len() < TILE as usize * h {
+            continue;
+        }
+        let t0 = idx * tw;
+        let s0 = t0.max(x0);
+        let s1 = (t0 + tw).min(x0 + w as i64);
+        if s0 >= s1 {
+            continue;
+        }
+        let dst_off = (s0 - x0) as usize;
+        let src_off = (s0 - t0) as usize;
+        let n = (s1 - s0) as usize;
+        for y in 0..h {
+            let d = y * w + dst_off;
+            let s = y * TILE as usize + src_off;
+            for (o, &v) in dst[d..d + n].iter_mut().zip(&tile[s..s + n]) {
+                *o = ((((v & 0x00ff00ff) * a + prb) >> 8) & 0x00ff00ff)
+                    | ((((v & 0x0000ff00) * a + pg) >> 8) & 0x0000ff00);
+            }
         }
     }
 }
@@ -631,6 +715,8 @@ impl ApplicationHandler for App {
                 presents: 0,
                 content: [UNKNOWN; RING],
                 ready: false,
+                fade_secs: self.opts.fade,
+                fade_from: None,
                 seed,
                 zoom: self.opts.zoom,
                 name: monitors
@@ -644,6 +730,7 @@ impl ApplicationHandler for App {
                 acq_us: Vec::new(),
                 commit_us: Vec::new(),
                 blit_us: Vec::new(),
+                fade_us: Vec::new(),
                 present_us: Vec::new(),
             };
             pane.window.request_redraw();
@@ -807,6 +894,7 @@ pub fn run(mut opts: Opts, seed: String) {
     };
     el.set_control_flow(ControlFlow::Poll);
     opts.fps = opts.fps.clamp(1, 240);
+    opts.fade = opts.fade.clamp(0.0, 60.0);
     let mut app = App {
         opts,
         seed,

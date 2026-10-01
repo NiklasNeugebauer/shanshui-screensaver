@@ -46,6 +46,7 @@ Each monitor gets its own seed, so they show different landscapes.
 | `--speed <px/s>` | `24` | scroll speed, snapped down to the nearest regular cadence (see below) |
 | `--fps <n>` | `30` | upper bound on steps per second, for when `--speed` is very fast |
 | `--zoom <f>` | fit height | pixels per world unit |
+| `--fade <secs>` | `1.0` | how long the scene takes to fade in over the paper at the start; `0` shows it at once |
 | `--class <name>` | `org.omarchy.screensaver` | Wayland app-id |
 | `--windowed` | — | a single normal window instead of fullscreen |
 | `--png <file>` | — | render one frame and exit |
@@ -67,6 +68,10 @@ therefore identical every time, which is what makes a slow pan look even; a
 timer that advances a fractional number of pixels per tick lands on irregular
 pixel boundaries and judders, especially when its period does not divide the
 refresh period.
+
+Nothing is shown until a monitor's first screenful is ready; the scene then
+fades in over the plain paper, one blended frame per refresh for `--fade`
+seconds while the scroll already runs underneath.
 
 The cost is that `--speed` is snapped to `refresh / k` — the fastest regular
 cadence that does not exceed what was asked. On a 60 Hz monitor, `--speed 24`
