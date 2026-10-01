@@ -3,6 +3,8 @@ use crate::rng::rand;
 use std::f64::consts::PI;
 
 fn expand(ptlist: &[Pt], wfun: &dyn Fn(f64) -> f64) -> (Vec<Pt>, Vec<Pt>) {
+    // the original draws (and discards) a value here; keep the stream aligned
+    let _ = rand();
     let mut v0: Vec<Pt> = Vec::new();
     let mut v1: Vec<Pt> = Vec::new();
     let n = ptlist.len();
@@ -198,9 +200,11 @@ pub fn man(xoff: f64, mut yoff: f64, a: &ManArgs) -> Canv {
 
     let cloth = |plist: &[Pt], fun: &dyn Fn(f64) -> f64, out: &mut Canv| {
         let tlist = bezmh(plist, 2.0);
-        let (t1, t2) = expand(&tlist, fun);
+        let (t1, mut t2) = expand(&tlist, fun);
+        // the original reverses tlist2 in place, so the stroke below sees it reversed
+        t2.reverse();
         let mut all: Vec<Pt> = t1.iter().map(|v| to_global(*v)).collect();
-        let mut r: Vec<Pt> = t2.iter().rev().map(|v| to_global(*v)).collect();
+        let mut r: Vec<Pt> = t2.iter().map(|v| to_global(*v)).collect();
         all.append(&mut r);
         out.extend(polyf(&all, WHITE));
         let g1: Vec<Pt> = t1.iter().map(|v| to_global(*v)).collect();

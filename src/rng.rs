@@ -167,14 +167,6 @@ impl Rt {
         r
     }
 
-    #[inline]
-    pub fn noise(&mut self, x: f64) -> f64 {
-        self.noise3(x, 0.0, 0.0)
-    }
-    #[inline]
-    pub fn noise2(&mut self, x: f64, y: f64) -> f64 {
-        self.noise3(x, y, 0.0)
-    }
 }
 
 #[inline]

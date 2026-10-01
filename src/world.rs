@@ -12,7 +12,6 @@ pub enum Tag {
     FlatMount,
     DistMount,
     Boat,
-    Water,
 }
 
 pub struct Chunk {
@@ -26,7 +25,7 @@ pub struct World {
     pub chunks: Vec<Chunk>,
     pub xmin: f64,
     pub xmax: f64,
-    planmtx: HashMap<i64, i32>,
+    planmtx: HashMap<i64, f64>,
 }
 
 struct Plan {
@@ -81,10 +80,16 @@ impl World {
 
         let xstep = 5.0;
         let mwid = 200.0;
+        // `planmtx[i1] = planmtx[i1] || 0` in the original: a slot that was
+        // incremented while still undefined holds NaN, which is falsy and so
+        // gets reset here. Slots incremented from a number keep their count.
         let mut i = xmin;
         while i < xmax {
             let i1 = jfloor(i / xstep) as i64;
-            self.planmtx.entry(i1).or_insert(0);
+            let e = self.planmtx.entry(i1).or_insert(0.0);
+            if e.is_nan() {
+                *e = 0.0;
+            }
             i += xstep;
         }
 
@@ -98,7 +103,7 @@ impl World {
                     if chadd(&mut reg, Plan { tag: Tag::Mount, x: xof, y: yof }, 10.0) {
                         let mut k = jfloor((xof - mwid) / xstep) as i64;
                         while (k as f64) < (xof + mwid) / xstep {
-                            *self.planmtx.entry(k).or_insert(0) += 1;
+                            *self.planmtx.entry(k).or_insert(f64::NAN) += 1.0;
                             k += 1;
                         }
                     }
@@ -117,12 +122,11 @@ impl World {
 
         let mut i = xmin;
         while i < xmax {
-            if self.planmtx.get(&(jfloor(i / xstep) as i64)).copied().unwrap_or(0) == 0
+            if self.planmtx.get(&(jfloor(i / xstep) as i64)).copied().unwrap_or(f64::NAN) == 0.0
                 && rand() < 0.01
             {
                 let mut j = 0.0;
-                let lim = 4.0 * rand();
-                while j < lim {
+                while j < 4.0 * rand() {
                     chadd(
                         &mut reg,
                         Plan {
@@ -182,11 +186,19 @@ impl World {
         }
     }
 
-    /// Generate forward until xmax is covered, mirroring the original chunkloader.
-    pub fn load(&mut self, xmax: f64) {
-        while xmax > self.xmax - CWID {
-            let plan = self.mountplanner(self.xmax, self.xmax + CWID);
-            self.xmax += CWID;
+    /// Mirrors the original chunkloader, including the one backward region it
+    /// generates on the first call.
+    pub fn load(&mut self, xmin: f64, xmax: f64) {
+        while xmax > self.xmax - CWID || xmin < self.xmin + CWID {
+            let plan = if xmax > self.xmax - CWID {
+                let p = self.mountplanner(self.xmax, self.xmax + CWID);
+                self.xmax += CWID;
+                p
+            } else {
+                let p = self.mountplanner(self.xmin - CWID, self.xmin);
+                self.xmin -= CWID;
+                p
+            };
             for (i, p) in plan.iter().enumerate() {
                 match p.tag {
                     Tag::Mount => {
@@ -218,7 +230,6 @@ impl World {
                         let c = arch::boat01(p.x, p.y, 120.0, sca, fli);
                         self.add(p.y, c);
                     }
-                    Tag::Water => {}
                 }
             }
         }

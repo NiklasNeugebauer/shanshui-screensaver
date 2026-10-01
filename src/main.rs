@@ -1,3 +1,12 @@
+#![allow(
+    clippy::collapsible_match,
+    clippy::manual_div_ceil,
+    clippy::manual_is_multiple_of,
+    clippy::needless_range_loop,
+    clippy::neg_cmp_op_on_partial_ord,
+    clippy::too_many_arguments
+)]
+
 mod arch;
 mod draw;
 mod man;
@@ -5,6 +14,8 @@ mod mount;
 mod raster;
 mod rng;
 mod screensaver;
+#[cfg(test)]
+mod tests;
 mod tree;
 mod world;
 
@@ -21,6 +32,8 @@ pub struct Opts {
     pub height: u32,
     pub x: f64,
     pub windowed: bool,
+    pub class: String,
+    pub bench: Option<f64>,
 }
 
 impl Default for Opts {
@@ -35,6 +48,8 @@ impl Default for Opts {
             height: 1080,
             x: 0.0,
             windowed: false,
+            class: "org.omarchy.screensaver".into(),
+            bench: None,
         }
     }
 }
@@ -42,12 +57,13 @@ impl Default for Opts {
 const USAGE: &str = "\
 shanshui - procedurally generated infinite landscape scroll
 
-  --class <name>      ignored, present so pkill -f org.omarchy.screensaver matches
+  --class <name>      wayland app-id (default org.omarchy.screensaver)
   --seed <string>     scene seed (default: current time)
   --speed <px/s>      scroll speed, default 24
   --fps <n>           frame cap, default 30
   --zoom <f>          pixels per world unit (default: fit window height)
   --windowed          do not request fullscreen
+  --bench <secs>      run the pipeline headlessly and report CPU use
   --png <file>        render one frame to PNG and exit
   --width/--height    size for --png, default 1920x1080
   --x <px>            horizontal scroll offset for --png
@@ -60,9 +76,7 @@ fn parse_args() -> Option<Opts> {
     while let Some(a) = it.next() {
         let mut next = || it.next().unwrap_or_default();
         match a.as_str() {
-            "--class" => {
-                next();
-            }
+            "--class" => o.class = next(),
             "--seed" => o.seed = Some(next()),
             "--speed" => o.speed = next().parse().unwrap_or(o.speed),
             "--fps" => o.fps = next().parse().unwrap_or(o.fps),
@@ -72,6 +86,7 @@ fn parse_args() -> Option<Opts> {
             "--height" => o.height = next().parse().unwrap_or(o.height),
             "--x" => o.x = next().parse().unwrap_or(o.x),
             "--windowed" => o.windowed = true,
+            "--bench" => o.bench = next().parse().ok().or(Some(5.0)),
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return None;
@@ -109,6 +124,10 @@ fn main() {
         let dt = t0.elapsed();
         pm.to_owned().save_png(path).expect("cannot write png");
         eprintln!("rendered {}x{} in {:?} (seed {seed})", o.width, o.height, dt);
+        return;
+    }
+    if let Some(secs) = o.bench {
+        screensaver::bench(o, seed, secs);
         return;
     }
     screensaver::run(o, seed);

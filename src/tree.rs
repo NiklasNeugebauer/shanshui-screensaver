@@ -284,7 +284,7 @@ fn bark(x: f64, y: f64, wid: f64, ang: f64) -> Canv {
     )
 }
 
-pub fn barkify(x: f64, y: f64, trlist: &(Vec<Pt>, Vec<Pt>)) -> Canv {
+pub fn barkify(x: f64, y: f64, trlist: &mut (Vec<Pt>, Vec<Pt>)) -> Canv {
     let mut canv = Canv::new();
     for i in 2..trlist.0.len().saturating_sub(1) {
         let a0 = (trlist.0[i][1] - trlist.0[i - 1][1]).atan2(trlist.0[i][0] - trlist.0[i - 1][0]);
@@ -331,23 +331,49 @@ pub fn barkify(x: f64, y: f64, trlist: &(Vec<Pt>, Vec<Pt>)) -> Canv {
             }
         }
     }
-    let mut trflist = trlist.0.clone();
-    let mut r = trlist.1.clone();
-    r.reverse();
-    trflist.extend(r);
-    let mut rglist: Vec<Vec<Pt>> = vec![Vec::new()];
-    for p in &trflist {
+    // trflist aliases trlist's own points in the original, and div() hands back
+    // the last one unchanged, so the jitter below writes through to the trunk.
+    let n0 = trlist.0.len();
+    let n1 = trlist.1.len();
+    let locate = |k: usize| -> (bool, usize) {
+        if k < n0 {
+            (false, k)
+        } else {
+            (true, n1 - 1 - (k - n0))
+        }
+    };
+    let mut rglist: Vec<Vec<usize>> = vec![Vec::new()];
+    for k in 0..n0 + n1 {
         if rand() < 0.5 {
             rglist.push(Vec::new());
         } else {
-            rglist.last_mut().unwrap().push(*p);
+            rglist.last_mut().unwrap().push(k);
         }
     }
-    for (i, rg) in rglist.iter_mut().enumerate() {
-        let mut d = div(rg, 4.0);
+    for (i, seg) in rglist.iter().enumerate() {
+        let pts: Vec<Pt> = seg
+            .iter()
+            .map(|&k| {
+                let (second, j) = locate(k);
+                if second {
+                    trlist.1[j]
+                } else {
+                    trlist.0[j]
+                }
+            })
+            .collect();
+        let mut d = div(&pts, 4.0);
         for (j, q) in d.iter_mut().enumerate() {
             q[0] += (n3(i as f64, j as f64 * 0.1, 1.0) - 0.5) * (15.0 + 5.0 * rand_gaussian());
             q[1] += (n3(i as f64, j as f64 * 0.1, 2.0) - 0.5) * (15.0 + 5.0 * rand_gaussian());
+        }
+        if let (Some(&k), Some(&last)) = (seg.last(), d.last()) {
+            let (second, j) = locate(k);
+            if second {
+                trlist.1[j] = last;
+            } else {
+                trlist.0[j] = last;
+            }
         }
         let pts: Vec<Pt> = d.iter().map(|v| [v[0] + x, v[1] + y]).collect();
         canv.extend(stroke(
@@ -383,8 +409,8 @@ pub fn tree04(x: f64, y: f64, hei: f64, wid: f64, col: Col) -> Canv {
     let mut txcanv = Canv::new();
     let mut twcanv = Canv::new();
 
-    let br = branch(&BranchArgs { hei, wid, ang: -PI / 2.0, ..Default::default() });
-    txcanv.extend(barkify(x, y, &br));
+    let mut br = branch(&BranchArgs { hei, wid, ang: -PI / 2.0, ..Default::default() });
+    txcanv.extend(barkify(x, y, &mut br));
     let mut trlist = br.0.clone();
     let mut r = br.1.clone();
     r.reverse();
@@ -407,7 +433,7 @@ pub fn tree04(x: f64, y: f64, hei: f64, wid: f64, col: Col) -> Canv {
             let off = trlist[i];
             let b0: Vec<Pt> = brlist.0.iter().map(|v| [v[0] + off[0], v[1] + off[1]]).collect();
             let b1: Vec<Pt> = brlist.1.iter().map(|v| [v[0] + off[0], v[1] + off[1]]).collect();
-            txcanv.extend(barkify(x, y, &(b0, b1)));
+            txcanv.extend(barkify(x, y, &mut (b0, b1)));
             for j in 0..brlist.0.len() {
                 if rand() < 0.2 || j == brlist.0.len() - 1 {
                     twcanv.extend(twig(
@@ -444,8 +470,8 @@ pub fn tree05(x: f64, y: f64, hei: f64, wid: f64, col: Col) -> Canv {
     let mut txcanv = Canv::new();
     let mut twcanv = Canv::new();
 
-    let br = branch(&BranchArgs { hei, wid, ang: -PI / 2.0, ben: 0.0, ..Default::default() });
-    txcanv.extend(barkify(x, y, &br));
+    let mut br = branch(&BranchArgs { hei, wid, ang: -PI / 2.0, ben: 0.0, ..Default::default() });
+    txcanv.extend(barkify(x, y, &mut br));
     let mut trlist = br.0.clone();
     let mut r = br.1.clone();
     r.reverse();
@@ -511,8 +537,8 @@ fn frac_tree6(
     txcanv: &mut Canv,
     twcanv: &mut Canv,
 ) -> Vec<Pt> {
-    let br = branch(&BranchArgs { hei, wid, ang, ben, det: hei / 20.0 });
-    txcanv.extend(barkify(xoff, yoff, &br));
+    let mut br = branch(&BranchArgs { hei, wid, ang, ben, det: hei / 20.0 });
+    txcanv.extend(barkify(xoff, yoff, &mut br));
     let mut trlist = br.0.clone();
     let mut r = br.1.clone();
     r.reverse();

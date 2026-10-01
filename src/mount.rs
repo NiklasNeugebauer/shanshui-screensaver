@@ -292,6 +292,7 @@ pub fn mountain(xoff: f64, yoff: f64, seed: f64, hei: f64, wid: f64, tex: usize,
     canv
 }
 
+
 pub fn flat_mount(xoff: f64, yoff: f64, seed: f64, hei: f64, wid: f64, tex: usize, cho: f64) -> Canv {
     let mut canv = Canv::new();
     let reso = [5usize, 50usize];
@@ -389,9 +390,19 @@ pub fn flat_mount(xoff: f64, yoff: f64, seed: f64, hei: f64, wid: f64, tex: usiz
     let mut grlist = g1;
     grlist.extend(g2);
     grlist.push(first);
-    for (i, p) in grlist.iter_mut().enumerate() {
+    // grlist's last entry is the same object as its first in the original, so
+    // that point gets scaled twice and both slots end up holding the result.
+    let gn = grlist.len();
+    for i in 0..gn {
         let v = (1.0 - ((i as f64 % d) - d / 2.0).abs() / (d / 2.0)) * 0.12;
-        p[0] *= 1.0 - v + n(p[1] * 0.5) * v;
+        if i == gn - 1 {
+            grlist[i][0] = grlist[0][0];
+        }
+        let f = 1.0 - v + n(grlist[i][1] * 0.5) * v;
+        grlist[i][0] *= f;
+        if i == gn - 1 {
+            grlist[0][0] = grlist[i][0];
+        }
     }
     canv.extend(poly(&grlist, xoff, yoff, WHITE, NONE, 2.0));
     let pts: Vec<Pt> = grlist.iter().map(|x| [x[0] + xoff, x[1] + yoff]).collect();
@@ -417,8 +428,7 @@ pub fn flat_dec(xoff: f64, yoff: f64, xmin: f64, xmax: f64, ymin: f64, ymax: f64
     let ymid = (ymin + ymax) / 2.0;
 
     let mut j = 0.0;
-    let lim = rand() * 5.0;
-    while j < lim {
+    while j < rand() * 5.0 {
         canv.extend(rock(
             xoff + norm_rand(xmin, xmax),
             yoff + ymid + norm_rand(-10.0, 10.0) + 10.0,
@@ -430,12 +440,12 @@ pub fn flat_dec(xoff: f64, yoff: f64, xmin: f64, xmax: f64, ymin: f64, ymax: f64
         ));
         j += 1.0;
     }
-    for _ in 0..rand_choice(&[0, 0, 1, 2]) {
+    let mut jj = 0;
+    while jj < rand_choice(&[0, 0, 1, 2]) {
         let xr = xoff + norm_rand(xmin, xmax);
         let yr = yoff + ymid + norm_rand(-5.0, 5.0) + 20.0;
         let mut k = 0.0;
-        let kl = 2.0 + rand() * 3.0;
-        while k < kl {
+        while k < 2.0 + rand() * 3.0 {
             canv.extend(tree::tree08(
                 xr + norm_rand(-30.0, 30.0).clamp(xmin, xmax),
                 yr,
@@ -445,11 +455,11 @@ pub fn flat_dec(xoff: f64, yoff: f64, xmin: f64, xmax: f64, ymin: f64, ymax: f64
             ));
             k += 1.0;
         }
+        jj += 1;
     }
     if tt == 0 {
         let mut j = 0.0;
-        let lim = rand() * 3.0;
-        while j < lim {
+        while j < rand() * 3.0 {
             canv.extend(rock(
                 xoff + norm_rand(xmin, xmax),
                 yoff + ymid + norm_rand(-5.0, 5.0) + 20.0,
@@ -479,8 +489,7 @@ pub fn flat_dec(xoff: f64, yoff: f64, xmin: f64, xmax: f64, ymin: f64, ymax: f64
             i += 30.0;
         }
         let mut j = 0.0;
-        let lim = rand() * 4.0;
-        while j < lim {
+        while j < rand() * 4.0 {
             canv.extend(rock(
                 xoff + norm_rand(xmin, xmax),
                 yoff + ymid + norm_rand(-5.0, 5.0) + 20.0,
@@ -493,13 +502,13 @@ pub fn flat_dec(xoff: f64, yoff: f64, xmin: f64, xmax: f64, ymin: f64, ymax: f64
             j += 1.0;
         }
     } else if tt == 2 {
-        for i in 0..rand_choice(&[1, 1, 1, 1, 2, 2, 3]) {
+        let mut i = 0;
+        while i < rand_choice(&[1, 1, 1, 1, 2, 2, 3]) {
             let xr = norm_rand(xmin, xmax);
             let yr = ymid;
             canv.extend(tree::tree04(xoff + xr, yoff + yr + 20.0, 300.0, 6.0, Col::grey(100.0, 0.5)));
             let mut j = 0.0;
-            let lim = rand() * 2.0;
-            while j < lim {
+            while j < rand() * 2.0 {
                 canv.extend(rock(
                     xoff + (xr + norm_rand(-50.0, 50.0)).clamp(xmin, xmax),
                     yoff + yr + norm_rand(-5.0, 5.0) + 20.0,
@@ -511,9 +520,11 @@ pub fn flat_dec(xoff: f64, yoff: f64, xmin: f64, xmax: f64, ymin: f64, ymax: f64
                 ));
                 j += 1.0;
             }
+            i += 1;
         }
     } else if tt == 3 {
-        for _ in 0..rand_choice(&[1, 1, 1, 1, 2, 2, 3]) {
+        let mut i = 0;
+        while i < rand_choice(&[1, 1, 1, 1, 2, 2, 3]) {
             canv.extend(tree::tree06(
                 xoff + norm_rand(xmin, xmax),
                 yoff + ymid,
@@ -521,6 +532,7 @@ pub fn flat_dec(xoff: f64, yoff: f64, xmin: f64, xmax: f64, ymin: f64, ymax: f64
                 6.0,
                 Col::grey(100.0, 0.5),
             ));
+            i += 1;
         }
     } else if tt == 4 {
         let pmin = rand() * 0.5;
@@ -542,8 +554,7 @@ pub fn flat_dec(xoff: f64, yoff: f64, xmin: f64, xmax: f64, ymin: f64, ymax: f64
     }
 
     let mut i = 0.0;
-    let lim = 50.0 * rand();
-    while i < lim {
+    while i < 50.0 * rand() {
         canv.extend(tree::tree02(
             xoff + norm_rand(xmin, xmax),
             yoff + norm_rand(ymin, ymax),

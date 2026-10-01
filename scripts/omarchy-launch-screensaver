@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# omarchy:summary=Launch the shanshui screensaver on every monitor.
+#
+# Drop-in replacement for the stock launcher. A login shell resolves
+# ~/.local/bin before /usr/share/omarchy/bin, so the idle service and the
+# "Screensaver" menu entry pick this up without touching the system copy.
+
+# Exit early if the screensaver is already running
+pgrep -f '[o]rg.omarchy.screensaver' >/dev/null && exit 0
+
+# Allow the screensaver to be turned off but still be force started
+if omarchy-toggle-enabled screensaver-off && [[ $1 != "force" ]]; then
+  exit 1
+fi
+
+SHANSHUI="${SHANSHUI_BIN:-$HOME/.local/bin/shanshui}"
+
+if [[ ! -x $SHANSHUI ]]; then
+  exec /usr/share/omarchy/bin/omarchy-launch-screensaver "$@"
+fi
+
+hypr_exec() {
+  local command
+  printf -v command '%q ' "$@"
+
+  hyprctl dispatch "hl.dsp.exec_cmd([[$command]])" >/dev/null 2>&1 ||
+    hyprctl dispatch exec -- bash -lc "$command" >/dev/null
+}
+
+# One process opens one fullscreen window per monitor, so unlike the stock
+# launcher there is nothing to iterate over and no focus to juggle.
+hypr_exec "$SHANSHUI" --class org.omarchy.screensaver ${SHANSHUI_ARGS:-}

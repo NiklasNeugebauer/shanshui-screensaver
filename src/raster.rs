@@ -134,7 +134,7 @@ impl Raster {
     pub fn render(&mut self, px0: i64) -> PixmapRef<'_> {
         let xw0 = px0 as f64 / self.scale;
         let xw1 = (px0 + self.width as i64) as f64 / self.scale;
-        self.world.load(xw1 + 1600.0);
+        self.world.load(xw0, xw1 + 1600.0);
         self.scene.fill(Color::TRANSPARENT);
         let t = Transform::from_row(
             self.scale as f32,
