@@ -43,8 +43,8 @@ Each monitor gets its own seed, so they show different landscapes.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--seed <string>` | current time | scene seed; the same seed reproduces the same landscape |
-| `--speed <px/s>` | `24` | scroll speed in logical pixels per second |
-| `--fps <n>` | `30` | frame cap; frames where nothing moved by a whole pixel are skipped anyway |
+| `--speed <px/s>` | `24` | scroll speed, snapped down to the nearest regular cadence (see below) |
+| `--fps <n>` | `30` | upper bound on steps per second, for when `--speed` is very fast |
 | `--zoom <f>` | fit height | pixels per world unit |
 | `--class <name>` | `org.omarchy.screensaver` | Wayland app-id |
 | `--windowed` | — | a single normal window instead of fullscreen |
@@ -58,17 +58,41 @@ shanshui --png scene.png --seed 20260101 --x 9000
 
 Set `SHANSHUI_ARGS` to pass flags through the shim.
 
+## Scrolling
+
+Motion is paced by the compositor, not by a timer. Each window presents on every
+Wayland frame callback and moves the scene by exactly one pixel every *k*
+callbacks, where *k* comes from that monitor's refresh rate. The step is
+therefore identical every time, which is what makes a slow pan look even; a
+timer that advances a fractional number of pixels per tick lands on irregular
+pixel boundaries and judders, especially when its period does not divide the
+refresh period.
+
+The cost is that `--speed` is snapped to `refresh / k` — the fastest regular
+cadence that does not exceed what was asked. On a 60 Hz monitor, `--speed 24`
+becomes 1 px every 3 refreshes, i.e. 20 px/s. Monitors are paced independently,
+so a mixed-refresh setup stays even on both.
+
 ## Performance
 
-The world is rasterized once into 512 px-wide tiles on a background thread that stays ahead of the window; each frame is a blit. Generation costs about 1% of a core; the blit is memory-bandwidth bound, so it scales with the pixel count:
+The world is rasterized once into 512 px-wide tiles, on a background thread per
+monitor that generates chunks sequentially and then rasterizes a batch of tiles
+across cores. Per frame the only work is a blit.
 
-| Resolution | CPU (one core) |
-|---|---|
-| 1920×1080 | ~8% |
-| 2560×1440 | ~10% |
-| 3840×2160 | ~21% |
+| | 2256×1504 | 1920×1080 |
+|---|---|---|
+| CPU (one core) | ~11% | ~7% |
+| peak RSS | 57 MB | 44 MB |
+| blit | 2.6 ms | 1.5 ms |
 
-`--fps` scales that down roughly linearly. Measure your own with `--bench`.
+CPU scales with `--speed`, not with the refresh rate: a one-pixel step has to be
+written into both of the surface's buffers, so the blit runs twice per pixel of
+travel and the frames in between are presented untouched. Halving `--speed`
+halves the CPU. Measure your own with `--bench`.
+
+The blit is memory-bandwidth bound rather than compute bound — splitting it
+across threads buys about 20% of wall time for two to three times the CPU — so
+it stays on one thread. Rasterizing tiles is the opposite and is parallel.
 
 ## Fidelity
 

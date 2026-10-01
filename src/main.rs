@@ -92,9 +92,20 @@ fn main() {
     if let Some(path) = &o.png {
         let mut r = make_raster(&seed, o.width, o.height, o.zoom);
         let t0 = std::time::Instant::now();
-        let pm = r.render(o.x as i64);
+        let mut buf = Vec::new();
+        r.render_u32(o.x as i64, &mut buf);
         let dt = t0.elapsed();
-        pm.to_owned().save_png(path).expect("cannot write png");
+        let mut pm = tiny_skia::Pixmap::new(o.width, o.height).unwrap();
+        for (px, v) in pm.pixels_mut().iter_mut().zip(&buf) {
+            *px = tiny_skia::PremultipliedColorU8::from_rgba(
+                (v >> 16) as u8,
+                (v >> 8) as u8,
+                *v as u8,
+                255,
+            )
+            .unwrap();
+        }
+        pm.save_png(path).expect("cannot write png");
         eprintln!("rendered {}x{} in {:?} (seed {seed})", o.width, o.height, dt);
         return;
     }

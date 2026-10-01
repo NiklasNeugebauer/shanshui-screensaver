@@ -1,9 +1,10 @@
 use crate::draw::Prim;
 use crate::rng::Rt;
 use crate::world::World;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tiny_skia::{
-    BlendMode, Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint,
-    PixmapRef, Stroke, Transform,
+    Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform,
 };
 
 pub const PAPER: usize = 512;
@@ -36,48 +37,62 @@ pub fn paper_tex(seed: &str) -> Pixmap {
     pm
 }
 
-pub struct Raster {
-    pub world: World,
+/// Per-thread scratch for rasterizing one tile. Several of these share one
+/// `World` so a batch of tiles can be rendered in parallel.
+pub struct TileRaster {
     pub scale: f64,
     pub height: u32,
-    paper: Pixmap,
+    pub width: u32,
+    paper: Arc<Pixmap>,
     scene: Pixmap,
-    out: Pixmap,
-    width: u32,
+}
+
+/// Owns the world and generates it; rasterizing goes through `TileRaster`.
+pub struct Raster {
+    pub world: World,
+    pub paper: Arc<Pixmap>,
+    pub scale: f64,
+    pub width: u32,
+    pub height: u32,
+    tr: TileRaster,
 }
 
 impl Raster {
     pub fn new(world: World, scale: f64, width: u32, height: u32, paper_seed: &str) -> Raster {
+        let paper = Arc::new(paper_tex(paper_seed));
         Raster {
             world,
             scale,
-            height,
             width,
-            paper: paper_tex(paper_seed),
-            scene: Pixmap::new(width, height).unwrap(),
-            out: Pixmap::new(width, height).unwrap(),
+            height,
+            tr: TileRaster::new(scale, width, height, paper.clone()),
+            paper,
         }
     }
 
-    fn fill_paper(&mut self, px0: i64) {
-        let paint = PixmapPaint::default();
-        let p = PAPER as i64;
-        let start = px0.div_euclid(p) * p;
-        let mut x = start;
-        while x < px0 + self.width as i64 {
-            let mut y = 0i64;
-            while y < self.height as i64 {
-                self.out.draw_pixmap(
-                    (x - px0) as i32,
-                    y as i32,
-                    self.paper.as_ref(),
-                    &paint,
-                    Transform::identity(),
-                    None,
-                );
-                y += p;
-            }
-            x += p;
+    /// Generate chunks so every tile in `px0..px1` can be rasterized.
+    pub fn ensure(&mut self, px0: i64, px1: i64) {
+        self.world.load(px0 as f64 / self.scale, px1 as f64 / self.scale + MARGIN);
+    }
+
+    pub fn render_u32(&mut self, px0: i64, dst: &mut Vec<u32>) {
+        self.ensure(px0, px0 + self.width as i64);
+        self.tr.render_u32(&self.world, px0, dst);
+    }
+}
+
+/// How far past the visible range chunks must exist before a tile is final:
+/// a single element can reach this far from its anchor.
+const MARGIN: f64 = 1600.0;
+
+impl TileRaster {
+    pub fn new(scale: f64, width: u32, height: u32, paper: Arc<Pixmap>) -> TileRaster {
+        TileRaster {
+            scale,
+            height,
+            width,
+            paper,
+            scene: Pixmap::new(width, height).unwrap(),
         }
     }
 
@@ -130,11 +145,10 @@ impl Raster {
         }
     }
 
-    /// Render the pixel column range [px0, px0+width) of the infinite scroll.
-    pub fn render(&mut self, px0: i64) -> PixmapRef<'_> {
+    /// Draw the ink layer for the pixel column range [px0, px0+width).
+    fn draw_scene(&mut self, world: &World, px0: i64) {
         let xw0 = px0 as f64 / self.scale;
         let xw1 = (px0 + self.width as i64) as f64 / self.scale;
-        self.world.load(xw0, xw1 + 1600.0);
         self.scene.fill(Color::TRANSPARENT);
         let t = Transform::from_row(
             self.scale as f32,
@@ -144,7 +158,7 @@ impl Raster {
             -(px0 as f32),
             0.0,
         );
-        for ch in &self.world.chunks {
+        for ch in &world.chunks {
             if ch.x1 < xw0 || ch.x0 > xw1 {
                 continue;
             }
@@ -152,25 +166,77 @@ impl Raster {
                 Self::draw_prim(&mut self.scene, prim, t);
             }
         }
-        self.fill_paper(px0);
-        self.out.draw_pixmap(
-            0,
-            0,
-            self.scene.as_ref(),
-            &PixmapPaint { blend_mode: BlendMode::Multiply, ..Default::default() },
-            Transform::identity(),
-            None,
-        );
-        self.out.as_ref()
     }
 
-    pub fn render_u32(&mut self, px0: i64, dst: &mut Vec<u32>) {
-        let pm = self.render(px0);
+    /// Multiply the ink layer onto the paper straight into the output words.
+    /// Doing it here rather than through a second pixmap saves a full-size
+    /// buffer per rasterizer and one composite pass per tile.
+    pub fn render_u32(&mut self, world: &World, px0: i64, dst: &mut Vec<u32>) {
+        self.draw_scene(world, px0);
+        let (w, h) = (self.width as usize, self.height as usize);
         dst.clear();
-        dst.reserve(pm.pixels().len());
-        for p in pm.pixels() {
-            let d = p.demultiply();
-            dst.push(((d.red() as u32) << 16) | ((d.green() as u32) << 8) | d.blue() as u32);
+        dst.resize(w * h, 0);
+        let src = self.scene.pixels();
+        let paper = self.paper.pixels();
+        let xo = px0.rem_euclid(PAPER as i64) as usize;
+        for y in 0..h {
+            let prow = (y & (PAPER - 1)) * PAPER;
+            let srow = y * w;
+            for x in 0..w {
+                let p = paper[prow + ((x + xo) & (PAPER - 1))];
+                let s = src[srow + x];
+                // multiply with a premultiplied source: Cr = Cb * (1 - a + Cs)
+                let a = 255 - s.alpha() as u32;
+                let m = |cb: u8, cs: u8| {
+                    let t = cb as u32 * (a + cs as u32) + 128;
+                    ((t + (t >> 8)) >> 8) & 0xff
+                };
+                dst[srow + x] =
+                    (m(p.red(), s.red()) << 16) | (m(p.green(), s.green()) << 8) | m(p.blue(), s.blue());
+            }
         }
     }
+}
+
+/// Rasterize several tiles at once, one `TileRaster` per thread over a shared
+/// world. Tiles are independent once their chunks exist, and the machine is
+/// otherwise idle while the screensaver runs.
+pub fn render_batch(
+    world: &World,
+    paper: &Arc<Pixmap>,
+    scale: f64,
+    tile_w: u32,
+    height: u32,
+    px0s: &[i64],
+) -> Vec<Vec<u32>> {
+    let n = px0s.len();
+    if n == 1 {
+        let mut tr = TileRaster::new(scale, tile_w, height, paper.clone());
+        let mut buf = Vec::new();
+        tr.render_u32(world, px0s[0], &mut buf);
+        return vec![buf];
+    }
+    let slots: Vec<Mutex<Vec<u32>>> = (0..n).map(|_| Mutex::new(Vec::new())).collect();
+    let cursor = AtomicUsize::new(0);
+    // Each thread keeps its own full-height scratch pixmap, so the width of the
+    // batch is capped to keep the startup burst's footprint bounded.
+    let threads =
+        n.min(std::thread::available_parallelism().map(|v| v.get()).unwrap_or(4)).min(6);
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| {
+                let mut tr = TileRaster::new(scale, tile_w, height, paper.clone());
+                loop {
+                    let i = cursor.fetch_add(1, Ordering::Relaxed);
+                    if i >= n {
+                        break;
+                    }
+                    let mut buf = Vec::new();
+                    tr.render_u32(world, px0s[i], &mut buf);
+                    *slots[i].lock().unwrap() = buf;
+                }
+            });
+        }
+    });
+    slots.into_iter().map(|m| m.into_inner().unwrap()).collect()
 }
