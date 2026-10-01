@@ -23,6 +23,10 @@ const MAX_BATCH: i64 = 32;
 const RING: usize = 8;
 /// marker for "this buffer holds nothing but paper"
 const BLANK: i64 = i64::MIN;
+/// marker for "what this buffer holds is unknown"; softbuffer keeps reporting
+/// the old age after it reallocates on resize, so the ring has to be poisoned
+/// by hand or we skip painting a freshly mapped (black) buffer
+const UNKNOWN: i64 = i64::MAX;
 const GRACE: Duration = Duration::from_millis(500);
 const DEADZONE: f64 = 12.0;
 const PAPER_FALLBACK: u32 = 0x00f3ecdd;
@@ -71,6 +75,11 @@ struct Pane {
     focused: bool,
     /// frame callbacks per 1 px step, derived from the monitor's refresh rate
     k: u32,
+    /// nothing is presented before the compositor has sized the surface: the
+    /// pre-configure default size would be committed and then reallocated
+    /// underneath the open animation
+    configured: bool,
+    phase: u32,
     frames: u64,
     presents: u64,
     /// x0 of the content presented n frames ago, so a stale buffer that already
@@ -86,6 +95,7 @@ struct Pane {
     intervals: Vec<f64>,
     ages: Vec<u32>,
     acq_us: Vec<f64>,
+    commit_us: Vec<f64>,
     blit_us: Vec<f64>,
     present_us: Vec<f64>,
 }
@@ -103,9 +113,12 @@ impl Pane {
         self.want = -1;
         self.scroll = 0.0;
         self.ready = false;
-        self.content = [BLANK; RING];
+        self.content = [UNKNOWN; RING];
         let speed_px = speed * self.window.scale_factor();
         self.k = cadence(self.refresh, speed_px, fps);
+        // Offset each window's step cycle: both blit on 2 of every k frames, so
+        // out-of-phase cycles cut how often they land in the same refresh.
+        self.frames = self.phase as u64 % self.k.max(1) as u64;
         trace!(
             "{}: {}x{} @{:.3}Hz, {:.1} px/s requested -> 1 px every {} frames = {:.1} px/s",
             self.name,
@@ -194,11 +207,16 @@ impl Pane {
         }
         if !self.ready && covers(&self.tiles, x0, self.w as i64) {
             self.ready = true;
-            trace!("{} first screenful complete ({} tiles)", self.name, self.tiles.len());
+            trace!(
+                "{} first screenful complete ({} tiles, after {} presents)",
+                self.name,
+                self.tiles.len(),
+                self.presents
+            );
         }
     }
 
-    fn draw(&mut self) {
+    fn draw(&mut self, wakeup: Instant) {
         let (w, h) = (self.w as usize, self.h as usize);
         let want = if self.ready { self.scroll as i64 } else { BLANK };
         let t_acq = Instant::now();
@@ -237,6 +255,7 @@ impl Pane {
             trace!("{} first present (tiles={})", self.name, self.tiles.len());
         }
         self.last_present = Some(now);
+        self.commit_us.push(now.duration_since(wakeup).as_secs_f64() * 1e6);
         self.acq_us.push(acq.as_secs_f64() * 1e6);
         if !fresh {
             self.blit_us.push(blit_t.as_secs_f64() * 1e6);
@@ -248,13 +267,17 @@ impl Pane {
     /// Advance on the frame callback, then present. Presenting on every
     /// callback is what keeps the surface in lockstep with the refresh; the
     /// blit above is skipped on the frames where nothing moved.
-    fn tick(&mut self, speed: f64, fps: u32) {
+    fn tick(&mut self, speed: f64, fps: u32, wakeup: Instant) {
+        if !self.configured {
+            self.window.request_redraw();
+            return;
+        }
         self.frames += 1;
         // Hold off until the compositor has finished configuring the surface,
         // otherwise the first size is thrown away and generated twice.
         if self.want < 0 {
             if self.frames < 3 {
-                self.draw();
+                self.draw(wakeup);
                 self.window.request_redraw();
                 return;
             }
@@ -264,7 +287,7 @@ impl Pane {
             self.scroll += 1.0;
         }
         self.pump();
-        self.draw();
+        self.draw(wakeup);
         self.window.request_redraw();
     }
 
@@ -298,6 +321,14 @@ impl Pane {
             pct(&mut iv, 0.5),
             pct(&mut iv, 0.95),
             pct(&mut iv, 1.0)
+        );
+        let mut c = self.commit_us.clone();
+        eprintln!(
+            "    wakeup->commit p50 {:.2}ms p95 {:.2}ms max {:.2}ms (budget {:.1}ms)",
+            pct(&mut c, 0.5) / 1000.0,
+            pct(&mut c, 0.95) / 1000.0,
+            pct(&mut c, 1.0) / 1000.0,
+            1000.0 / self.refresh
         );
         eprintln!(
             "    acquire p50 {:.0}us p95 {:.0}us | blit p50 {:.0}us p95 {:.0}us | present p50 {:.0}us p95 {:.0}us",
@@ -490,6 +521,9 @@ struct App {
     ever_focused: bool,
     unfocused_since: Option<Instant>,
     signalled: Arc<AtomicBool>,
+    /// start of the current event-loop iteration, i.e. roughly when the
+    /// compositor's frame callback landed
+    wakeup: Instant,
     /// dev harness: run this long ignoring input, then dump frame stats
     selftest: Option<Duration>,
 }
@@ -515,12 +549,20 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    fn new_events(&mut self, _el: &ActiveEventLoop, _cause: winit::event::StartCause) {
+        self.wakeup = Instant::now();
+    }
+
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if !self.panes.is_empty() {
             return;
         }
         let monitors: Vec<_> = el.available_monitors().collect();
-        let count = if self.opts.windowed { 1 } else { monitors.len().max(1) };
+        let count = if self.opts.windowed {
+            std::env::var("SHANSHUI_WINDOWS").ok().and_then(|v| v.parse().ok()).unwrap_or(1)
+        } else {
+            monitors.len().max(1)
+        };
         for i in 0..count {
             let mut attrs = Window::default_attributes()
                 .with_title("shanshui")
@@ -571,7 +613,7 @@ impl ApplicationHandler for App {
                 })
                 .map(|v| v as f64 / 1000.0)
                 .unwrap_or(60.0);
-            let mut pane = Pane {
+            let pane = Pane {
                 window,
                 surface,
                 w,
@@ -583,9 +625,11 @@ impl ApplicationHandler for App {
                 want: -1,
                 focused: false,
                 k: 2,
+                configured: false,
+                phase: (i as u32).wrapping_mul(2),
                 frames: 0,
                 presents: 0,
-                content: [BLANK; RING],
+                content: [UNKNOWN; RING],
                 ready: false,
                 seed,
                 zoom: self.opts.zoom,
@@ -598,10 +642,10 @@ impl ApplicationHandler for App {
                 intervals: Vec::new(),
                 ages: Vec::new(),
                 acq_us: Vec::new(),
+                commit_us: Vec::new(),
                 blit_us: Vec::new(),
                 present_us: Vec::new(),
             };
-            pane.draw();
             pane.window.request_redraw();
             self.panes.push(pane);
         }
@@ -678,12 +722,19 @@ impl ApplicationHandler for App {
                     if p.window.id() == id {
                         let h = size.height.max(1);
                         let changed = h != p.h && p.want >= 0;
+                        let resized = p.w != size.width.max(1) || p.h != h;
                         p.w = size.width.max(1);
                         p.h = h;
                         let _ = p.surface.resize(
                             NonZeroU32::new(p.w).unwrap(),
                             NonZeroU32::new(p.h).unwrap(),
                         );
+                        if resized || !p.configured {
+                            // both surface buffers are reallocated lazily and
+                            // come back unpainted, whatever age claims
+                            p.content = [UNKNOWN; RING];
+                        }
+                        p.configured = true;
                         // tiles are full-window-height, so a height change
                         // invalidates every one of them
                         if changed {
@@ -694,9 +745,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 let (speed, fps) = (self.opts.speed, self.opts.fps);
+                let wakeup = self.wakeup;
                 for p in self.panes.iter_mut() {
                     if p.window.id() == id {
-                        p.tick(speed, fps);
+                        p.tick(speed, fps, wakeup);
                     }
                 }
             }
@@ -765,6 +817,7 @@ pub fn run(mut opts: Opts, seed: String) {
         ever_focused: false,
         unfocused_since: None,
         signalled,
+        wakeup: Instant::now(),
         selftest: std::env::var("SHANSHUI_SELFTEST")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
